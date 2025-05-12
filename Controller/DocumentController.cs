@@ -1,96 +1,66 @@
-using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
-using WordEditorApi.Models;
+using WordEditorApi.DTOs;
+using WordEditorApi.Services;
 
 namespace WordEditorApi.Controller;
 
 [Route("api/[controller]")]
 [ApiController]
-public class DocumentsController : ControllerBase
+public class DocumentController : ControllerBase
 {
-    private readonly string storagePath = Path.Combine(Directory.GetCurrentDirectory(), "Documents");
-    private readonly string serverUrl = "http://localhost:7144"; // 替換為你的實際 public 網址
+    private readonly IDocumentService _documentService;
 
-    public DocumentsController()
+    public DocumentController(IDocumentService documentService)
     {
-        if (!Directory.Exists(storagePath))
-            Directory.CreateDirectory(storagePath);
+        _documentService = documentService;
     }
 
-    // 取得檔案列表
     [HttpGet]
     public IActionResult GetDocuments()
     {
-        var files = Directory.GetFiles(storagePath)
-            .Select(f => new DocumentInfo
-            {
-                Id = Path.GetFileNameWithoutExtension(f),
-                FileName = Path.GetFileName(f),
-                Url = $"{serverUrl}/Documents/{Path.GetFileName(f)}"
-            }).ToList();
-
-        return Ok(files);
+        var documents = _documentService.GetDocuments();
+        return Ok(documents);
     }
 
-    // 新增檔案
     [HttpPost]
-    public IActionResult CreateDocument()
+    public async Task<IActionResult> CreateDocument([FromBody] CreateDocumentRequest request)
     {
-        var newId = Guid.NewGuid().ToString();
-        var fileName = $"{newId}.docx";
-        var filePath = Path.Combine(storagePath, fileName);
-
-        // 複製空白模板或創建空白檔案
-        System.IO.File.Copy("Empty.docx", filePath); // 你需要準備一個空的 Word 檔案
-
-        return Ok(new { Id = newId });
+        var document = await _documentService.CreateDocument(request);
+        return Ok(document);
     }
 
-    // 取得 OnlyOffice 編輯用設定
-    [HttpGet("{id}/editor-config")]
-    public IActionResult GetEditorConfig(string id)
+    [HttpGet("{id}")]
+    public async Task<IActionResult> GetEditorConfig(string id, string fileType, string mode)
     {
-        var fileName = $"{id}.docx";
-        var fileUrl = $"{serverUrl}/Documents/{fileName}";
-
-        var config = new
+        try
         {
-            document = new
-            {
-                fileType = "docx",
-                key = id,
-                title = fileName,
-                url = fileUrl
-            },
-            editorConfig = new
-            {
-                mode = "edit",
-                callbackUrl = $"{serverUrl}/api/docs/{id}/callback"
-            }
-        };
+            if (!Enum.TryParse<DocumentMode>(mode, true, out var documentMode))
+                return BadRequest($"無效的mode參數: {mode}");
 
-        return Ok(config);
+            var config = await _documentService.GetEditorConfig(id, fileType, documentMode);
+            return Ok(config);
+        }
+        catch (FileNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
-    // 接收 OnlyOffice 編輯結果（儲存）
     [HttpPost("{id}/callback")]
     public async Task<IActionResult> SaveCallback(string id)
     {
-        using var reader = new StreamReader(Request.Body);
-        var body = await reader.ReadToEndAsync();
-        var json = JsonDocument.Parse(body);
-        var status = json.RootElement.GetProperty("status").GetInt32();
-
-        if (status == 2) // 已完成儲存
+        try
         {
-            var downloadUrl = json.RootElement.GetProperty("url").GetString();
-            var targetPath = Path.Combine(storagePath, $"{id}.docx");
-
-            using var httpClient = new HttpClient();
-            var fileBytes = await httpClient.GetByteArrayAsync(downloadUrl);
-            await System.IO.File.WriteAllBytesAsync(targetPath, fileBytes);
+            await _documentService.ProcessCallback(id, Request.Body);
+            return Ok(new { error = 0 });
         }
-
-        return Ok(new { error = 0 });
+        catch (FileNotFoundException)
+        {
+            return NotFound(new { error = 1, message = "找不到指定的文檔" });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = 1, message = "處理回調時發生內部錯誤" });
+        }
     }
 }

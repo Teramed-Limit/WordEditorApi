@@ -1,9 +1,29 @@
+using WordEditorApi.Services;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
+// Add services to the container.
+builder.Services.AddScoped<IDocumentService, DocumentService>();
+
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+// Add services to the container.
+builder.Services.AddControllers();
+
+// 配置 CORS 以允許所有來源的請求
+builder.Services.AddCors(options =>
+{
+    // var allowedOrigins = configuration.GetSection("AllowedOrigins").Get<string[]>();
+    options.AddPolicy(
+        "AllowAll",
+        policy =>
+        {
+            policy.WithOrigins(["http://localhost:5173", "https://localhost:5173"]).AllowAnyMethod().AllowAnyHeader().AllowCredentials();
+        }
+    );
+});
 
 var app = builder.Build();
 
@@ -14,31 +34,19 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+if (!Directory.Exists(Path.Combine(Directory.GetCurrentDirectory(), "Documents")))
+    Directory.CreateDirectory(Path.Combine(Directory.GetCurrentDirectory(), "Documents"));
+
+// 允許前端與 OnlyOffice 存取文件
+app.UseStaticFiles();
+
 app.UseHttpsRedirection();
 
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
+// 使用 CORS
+app.UseCors("AllowAll");
 
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast")
-.WithOpenApi();
+
+app.MapControllers();
 
 app.Run();
 
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
