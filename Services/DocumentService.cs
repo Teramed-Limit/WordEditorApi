@@ -1,9 +1,10 @@
 using System.Text.Json;
-using PdfSharpCore.Pdf;
-using PdfSharpCore.Pdf.AcroForms;
-using PdfSharpCore.Pdf.IO;
+using System.Text.RegularExpressions;
+using iTextSharp.text;
 using WordEditorApi.DTOs;
 using WordEditorApi.Utils;
+using iTextSharp.text.pdf;
+using Microsoft.Extensions.Logging.Console;
 
 
 namespace WordEditorApi.Services;
@@ -97,9 +98,11 @@ public class DocumentService : IDocumentService
 
         FillForm(new Dictionary<string, string>
         {
-            { "Text2", "預設值1" },
-            { "CheckBox1", "Yes" },
-            { "text2", "test" }
+            { "Name", "羅彥松" },
+            { "DropDown2", "Yes" },
+            { "DropDown3", "Yes" },
+            { "CheckBox4", "Yes" },
+            { "Group 1", "Yes" }
         }, filePath);
 
         return new
@@ -384,56 +387,60 @@ public class DocumentService : IDocumentService
         _logger.LogInformation($"表單提交日誌: {logJson}");
     }
 
-    private string FillForm(Dictionary<string, string> data, string templatePath)
+    private string FillForm(Dictionary<string, string> formData, string templatePath)
     {
-        // 檢查檔案是否存在
         if (!File.Exists(templatePath))
         {
             throw new FileNotFoundException($"找不到範本檔案: {templatePath}");
         }
 
-        using var inputDocument = PdfReader.Open(templatePath, PdfDocumentOpenMode.Modify);
-        if (inputDocument.AcroForm == null)
-            return templatePath;
-
-        inputDocument.AcroForm.Elements.SetBoolean("/NeedAppearances", true);
-        var form = inputDocument.AcroForm.Fields;
-
-        foreach (var item in form.Names)
-        {
-            Console.WriteLine($"欄位名稱: {item} ");
-        }
-
-        // 遍歷所有表單欄位並填寫
-        foreach (var field in data)
-        {
-            try
-            {
-                SetField(form, field.Key, field.Value);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError($"填寫欄位 {field.Key} 時發生錯誤: {ex.Message}");
-            }
-        }
-
-        // 取得檔案名稱和路徑
         string fileName = Path.GetFileNameWithoutExtension(templatePath);
         string directory = Path.GetDirectoryName(templatePath);
-        string newFileName = $"{fileName}_auto.pdf";
-        string newFilePath = Path.Combine(directory, newFileName);
+        string newFilePath = Path.Combine(directory, $"{fileName}_auto.pdf");
 
-        // 儲存填寫後的PDF
-        inputDocument.Save(newFilePath);
+        using (var reader = new PdfReader(templatePath))
+        using (var stream = new FileStream(newFilePath, FileMode.Create))
+        {
+            var stamper = new PdfStamper(reader, stream);
+            var form = stamper.AcroFields;
+
+            foreach (var field in formData)
+            {
+                string fieldName = field.Key;
+                string value = field.Value;
+
+                if (!form.Fields.ContainsKey(fieldName)) continue;
+
+                form.SetField(fieldName, value);
+                // 確保欄位不是唯讀
+                form.SetFieldProperty(fieldName, "setfflags", 0, null);
+            }
+
+            // 鎖定表單防止編輯
+            stamper.FormFlattening = false;
+            stamper.AcroFields.GenerateAppearances = true;
+            stamper.Close();
+        }
+
+        // var isPdfForm = IsPdfFormSimple(templatePath);
+        // isPdfForm = IsPdfFormSimple(newFilePath);
 
         return newFilePath;
     }
 
-    private void SetField(PdfAcroField.PdfAcroFieldCollection fields, string name, string value)
+    private static bool IsPdfFormSimple(string filePath)
     {
-        if (fields[name] is PdfTextField textField)
+        try
         {
-            textField.Value = new PdfString(value);
+            byte[] bytes = File.ReadAllBytes(filePath);
+            string pdfContent = System.Text.Encoding.ASCII.GetString(bytes);
+            // 檢查是否包含 AcroForm 和 Fields 的標記
+            return Regex.IsMatch(pdfContent, @"/AcroForm") &&
+                   Regex.IsMatch(pdfContent, @"/Fields");
+        }
+        catch
+        {
+            return false;
         }
     }
 }
